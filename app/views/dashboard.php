@@ -42,7 +42,8 @@ if (!isset($_SESSION['user_id'])) {
                     <div class="card-body text-center">
                         <h5 class="card-title fw-bold">🛒 Punto de Venta (POS)</h5>
                         <p class="card-text text-muted">Módulo para registrar ventas rápidas y generación de comprobantes.</p>
-                        <button class="btn btn-secondary" disabled>Próximamente</button>
+                        <!-- AQUÍ ESTÁ EL CAMBIO -->
+                        <a href="pos.php" class="btn btn-primary">Ir al POS</a>
                     </div>
                 </div>
             </div>

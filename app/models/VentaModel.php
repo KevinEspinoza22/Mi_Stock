@@ -1,79 +1,61 @@
 <?php
-// ==============================================================================
-// MODELO DE VENTAS (app/models/VentaModel.php)
-// Gestiona el registro de ventas y la deducción automática de stock en SQL Server.
-// ==============================================================================
-
 require_once __DIR__ . '/../../config/database.php';
+require_once __DIR__ . '/../../app/services/EmailService.php';
+require_once __DIR__ . '/ProductoModel.php';
 
 class VentaModel {
-    private $db;
+    private PDO $db;
+    public function __construct() { $this->db = (new Database())->getConnection(); }
 
-    public function __construct() {
-        $database = new Database();
-        $this->db = $database->getConnection();
+    public function registrarVenta(int $idUsuario, array $detalles, string $tipoDocumento='BOLETA', ?string $numeroDocumento=null): array {
+        if (!$detalles) throw new RuntimeException('La venta no contiene productos.');
+        $productoModel = new ProductoModel();
+        $idsAfectados = [];
+        $this->db->beginTransaction();
+        try {
+            $stmt = $this->db->prepare("INSERT INTO Ventas (IdUsuario, FechaVenta, TipoDocumento, NumeroDocumento, Total) VALUES (?, NOW(), ?, ?, 0)");
+            $stmt->execute([$idUsuario, $tipoDocumento, $numeroDocumento]);
+            $idVenta = (int)$this->db->lastInsertId();
+
+            $mov = $this->db->prepare("INSERT INTO Movimientos (TipoMovimiento, IdUsuario, Observacion) VALUES ('SALIDA', ?, ?)");
+            $mov->execute([$idUsuario, 'Venta #'.$idVenta.($numeroDocumento ? ' - Documento '.$numeroDocumento : '')]);
+            $idMovimiento = (int)$this->db->lastInsertId();
+
+            $det = $this->db->prepare("INSERT INTO DetalleVentas (IdVenta, IdProducto, Cantidad, PrecioUnitario, Subtotal) VALUES (?,?,?,?,?)");
+            $detMov = $this->db->prepare("INSERT INTO DetalleMovimiento (IdMovimiento, IdProducto, Cantidad) VALUES (?,?,?)");
+            $stockCheck = $this->db->prepare("SELECT StockActual, PrecioVenta FROM Productos WHERE IdProducto=? AND Estado=1 FOR UPDATE");
+            $totalCalculado = 0.0;
+
+            foreach ($detalles as $item) {
+                $idProducto = (int)$item['id_producto'];
+                $cantidad = (int)$item['cantidad'];
+                if ($cantidad <= 0) throw new RuntimeException('Cantidad inválida.');
+                $stockCheck->execute([$idProducto]);
+                $producto = $stockCheck->fetch();
+                if (!$producto) throw new RuntimeException('Producto no encontrado.');
+                if ((int)$producto['StockActual'] < $cantidad) throw new RuntimeException('Stock insuficiente para el producto #'.$idProducto.'.');
+                $precio = (float)$producto['PrecioVenta'];
+                $subtotal = $cantidad * $precio;
+                $totalCalculado += $subtotal;
+                $det->execute([$idVenta, $idProducto, $cantidad, $precio, $subtotal]);
+                $detMov->execute([$idMovimiento, $idProducto, $cantidad]);
+                $idsAfectados[] = $idProducto;
+            }
+
+            $updateTotal = $this->db->prepare("UPDATE Ventas SET Total=? WHERE IdVenta=?");
+            $updateTotal->execute([$totalCalculado, $idVenta]);
+            $this->db->commit();
+            $criticos = $productoModel->obtenerCriticosPorIds(array_unique($idsAfectados));
+            if ($criticos) (new EmailService())->enviarAlertaStock($criticos);
+            return ['id_venta'=>$idVenta, 'criticos'=>$criticos];
+        } catch (Throwable $e) {
+            if ($this->db->inTransaction()) $this->db->rollBack();
+            throw $e;
+        }
     }
 
-    /**
-     * Registra una nueva venta con sus detalles y descuenta el stock dentro de una transacción SQL.
-     * @param int $idUsuario ID del usuario que procesa la venta
-     * @param float $total Monto total de la venta
-     * @param array $detalles Lista de productos en la venta [['id_producto', 'cantidad', 'precio_unitario']]
-     * @return bool
-     */
-    public function registrarVenta($idUsuario, $total, $detalles) {
-        // Iniciar transacción en SQL Server para garantizar integridad de datos
-        if (sqlsrv_begin_transaction($this->db) === false) {
-            return false;
-        }
-
-        try {
-            // 1. Insertar la cabecera de la venta
-            $sqlVenta = "INSERT INTO Ventas (id_usuario, fecha, total) VALUES (?, GETDATE(), ?);
-                         SELECT SCOPE_IDENTITY() AS id_venta;";
-            $paramsVenta = array($idUsuario, $total);
-            
-            $stmtVenta = sqlsrv_query($this->db, $sqlVenta, $paramsVenta);
-            if ($stmtVenta === false) {
-                throw new Exception("Error al registrar cabecera de venta.");
-            }
-
-            sqlsrv_next_result($stmtVenta);
-            $rowVenta = sqlsrv_fetch_array($stmtVenta, SQLSRV_FETCH_ASSOC);
-            $idVenta = $rowVenta['id_venta'];
-
-            // 2. Insertar cada detalle y actualizar el stock
-            foreach ($detalles as $item) {
-                // Insertar detalle
-                $sqlDetalle = "INSERT INTO DetalleVentas (id_venta, id_producto, cantidad, precio_unitario, subtotal) 
-                               VALUES (?, ?, ?, ?, ?)";
-                $subtotal = $item['cantidad'] * $item['precio_unitario'];
-                $paramsDetalle = array($idVenta, $item['id_producto'], $item['cantidad'], $item['precio_unitario'], $subtotal);
-                
-                $stmtDetalle = sqlsrv_query($this->db, $sqlDetalle, $paramsDetalle);
-                if ($stmtDetalle === false) {
-                    throw new Exception("Error al registrar detalle de venta.");
-                }
-
-                // Descontar stock del producto
-                $sqlStock = "UPDATE Productos SET stock = stock - ? WHERE id_producto = ?";
-                $paramsStock = array($item['cantidad'], $item['id_producto']);
-                
-                $stmtStock = sqlsrv_query($this->db, $sqlStock, $paramsStock);
-                if ($stmtStock === false) {
-                    throw new Exception("Error al actualizar stock.");
-                }
-            }
-
-            // Si todo salió bien, confirmar la transacción
-            sqlsrv_commit($this->db);
-            return true;
-
-        } catch (Exception $e) {
-            // Ante cualquier fallo, revertir los cambios
-            sqlsrv_rollback($this->db);
-            return false;
-        }
+    public function resumenHoy(): array {
+        $row = $this->db->query("SELECT COUNT(*) AS cantidad, COALESCE(SUM(Total),0) AS total FROM Ventas WHERE DATE(FechaVenta)=CURDATE()")->fetch();
+        return $row ?: ['cantidad'=>0,'total'=>0];
     }
 }
-?>

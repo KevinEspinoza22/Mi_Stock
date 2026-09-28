@@ -1,47 +1,29 @@
 <?php
-// ==============================================================================
-// MODELO DE USUARIO (app/models/UsuarioModel.php)
-// Administra las consultas SQL hacia la tabla de usuarios existente.
-// ==============================================================================
-
 require_once __DIR__ . '/../../config/database.php';
 
 class UsuarioModel {
-    private $db;
+    private PDO $db;
 
     public function __construct() {
-        $database = new Database();
-        $this->db = $database->getConnection();
+        $this->db = (new Database())->getConnection();
     }
 
-    /**
-     * Valida las credenciales ingresadas en el Login.
-     * @param string $usuario Nombre de usuario o correo
-     * @param string $password Contraseña ingresada
-     * @return array|false Retorna los datos del usuario o false si falla.
-     */
-    public function autenticar($usuario, $password) {
-        // Consulta SQL parametrizada para evitar inyecciones SQL
-        $sql = "SELECT id_usuario, nombre, usuario, password, rol 
-                FROM Usuarios 
-                WHERE usuario = ? AND estado = 1";
+    public function autenticar(string $correo, string $password): array|false {
+        $sql = "SELECT u.IdUsuario, u.Nombre, u.Apellido, u.Correo, u.Password, r.Nombre AS Rol
+                FROM Usuarios u
+                INNER JOIN Roles r ON r.IdRol = u.IdRol
+                WHERE u.Correo = :correo AND u.Estado = 1 AND r.Estado = 1
+                LIMIT 1";
+        $stmt = $this->db->prepare($sql);
+        $stmt->execute(['correo' => $correo]);
+        $row = $stmt->fetch();
+        if (!$row) return false;
 
-        $params = array($usuario);
-        $stmt = sqlsrv_query($this->db, $sql, $params);
+        $stored = (string)$row['Password'];
+        $valid = password_verify($password, $stored) || hash_equals($stored, $password);
+        if (!$valid) return false;
 
-        if ($stmt === false) {
-            die(print_r(sqlsrv_errors(), true));
-        }
-
-        // Si se encuentra el registro, verificamos la contraseña
-        if ($row = sqlsrv_fetch_array($stmt, SQLSRV_FETCH_ASSOC)) {
-            // Nota: Se valida texto plano si la BD base viene así, o password_verify si viene encriptada
-            if ($password === $row['password']) {
-                return $row;
-            }
-        }
-
-        return false;
+        unset($row['Password']);
+        return $row;
     }
 }
-?>

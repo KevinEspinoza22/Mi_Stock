@@ -1,78 +1,18 @@
 <?php
-session_start();
-if (!isset($_SESSION['user_id'])) {
-    header('Location: ../../public/index.php');
-    exit();
-}
-
+require_once __DIR__ . '/../helpers/auth.php'; requireLogin();
 require_once __DIR__ . '/../models/ProductoModel.php';
-$model = new ProductoModel();
-$productos = $model->obtenerTodos();
-$alertasStock = $model->obtenerStockCritico();
+$model=new ProductoModel();
+if ($_SERVER['REQUEST_METHOD']==='POST' && $_SESSION['rol']==='Administrador') {
+  try { $model->crear($_POST); header('Location: productos.php?ok=1'); exit; } catch(Throwable $e) { $error=$e->getMessage(); }
+}
+$productos=$model->obtenerTodos(); $alertas=$model->obtenerStockCritico(); $categorias=$model->obtenerCategorias(); $proveedores=$model->obtenerProveedores();
 ?>
-<!DOCTYPE html>
-<html lang="es">
-<head>
-    <meta charset="UTF-8">
-    <title>Inventario y Productos - Mi Almacén POS</title>
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
-</head>
-<body class="bg-light p-4">
-    <div class="container-fluid">
-        <div class="d-flex justify-content-between align-items-center mb-4">
-            <h2>Gestión de Inventario</h2>
-            <a href="dashboard.php" class="btn btn-outline-secondary">Volver al Panel</a>
-        </div>
-
-        <!-- Alertas de Stock Crítico -->
-        <?php if (!empty($alertasStock)): ?>
-            <div class="alert alert-warning shadow-sm" role="alert">
-                <h5 class="alert-heading fw-bold">⚠️ Alertas de Stock Crítico</h5>
-                <ul class="mb-0">
-                    <?php foreach ($alertasStock as $alerta): ?>
-                        <li>
-                            <strong><?php echo htmlspecialchars($alerta['nombre']); ?></strong> 
-                            - Stock actual: <span class="badge bg-danger"><?php echo $alerta['stock']; ?> unidades</span> 
-                            (Mínimo requerido: <?php echo $alerta['stock_minimo']; ?>)
-                        </li>
-                    <?php endforeach; ?>
-                </ul>
-            </div>
-        <?php endif; ?>
-
-        <!-- Tabla de Productos -->
-        <div class="card shadow-sm mt-3">
-            <div class="card-body">
-                <table class="table table-striped table-hover align-middle">
-                    <thead class="table-dark">
-                        <tr>
-                            <th>Código</th>
-                            <th>Producto</th>
-                            <th>Precio</th>
-                            <th>Stock</th>
-                            <th>Estado</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        <?php foreach ($productos as $prod): ?>
-                            <tr>
-                                <td><code><?php echo htmlspecialchars($prod['codigo_barra']); ?></code></td>
-                                <td><?php echo htmlspecialchars($prod['nombre']); ?></td>
-                                <td>$<?php echo number_format($prod['precio'], 0, ',', '.'); ?></td>
-                                <td><?php echo $prod['stock']; ?></td>
-                                <td>
-                                    <?php if ($prod['stock'] <= $prod['stock_minimo']): ?>
-                                        <span class="badge bg-danger">Reabastecer</span>
-                                    <?php else: ?>
-                                        <span class="badge bg-success">Optimo</span>
-                                    <?php endif; ?>
-                                </td>
-                            </tr>
-                        <?php endforeach; ?>
-                    </tbody>
-                </table>
-            </div>
-        </div>
-    </div>
-</body>
-</html>
+<!DOCTYPE html><html lang="es"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Inventario - Mi Stock</title><link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet"></head>
+<body class="bg-light"><div class="container-fluid p-4"><div class="d-flex justify-content-between mb-4"><h2>📦 Gestión de inventario</h2><a href="dashboard.php" class="btn btn-outline-secondary">Volver</a></div>
+<?php if(!empty($_GET['ok'])):?><div class="alert alert-success">Producto creado correctamente.</div><?php endif;?><?php if(!empty($error)):?><div class="alert alert-danger"><?=e($error)?></div><?php endif;?>
+<?php if($alertas):?><div class="alert alert-warning"><strong>⚠ Stock bajo:</strong> <?=count($alertas)?> producto(s). <a href="reportes.php">Ver reporte</a></div><?php endif;?>
+<?php if($_SESSION['rol']==='Administrador'):?><div class="card border-0 shadow-sm mb-4"><div class="card-header bg-white fw-bold">Nuevo producto</div><div class="card-body"><form method="post" class="row g-3">
+<div class="col-md-2"><label class="form-label">Código</label><input class="form-control" name="codigo" required></div><div class="col-md-3"><label class="form-label">Nombre</label><input class="form-control" name="nombre" required></div><div class="col-md-3"><label class="form-label">Descripción</label><input class="form-control" name="descripcion"></div><div class="col-md-2"><label class="form-label">Categoría</label><select class="form-select" name="categoria" required><?php foreach($categorias as $c):?><option value="<?=$c['IdCategoria']?>"><?=e($c['Nombre'])?></option><?php endforeach;?></select></div><div class="col-md-2"><label class="form-label">Proveedor</label><select class="form-select" name="proveedor"><option value="">Sin proveedor</option><?php foreach($proveedores as $p):?><option value="<?=$p['IdProveedor']?>"><?=e($p['Nombre'])?></option><?php endforeach;?></select></div><div class="col-md-2"><label class="form-label">Stock inicial</label><input type="number" min="0" class="form-control" name="stock" value="0"></div><div class="col-md-2"><label class="form-label">Stock mínimo</label><input type="number" min="0" class="form-control" name="stock_minimo" value="0"></div><div class="col-md-2"><label class="form-label">Precio compra</label><input type="number" min="0" step="0.01" class="form-control" name="precio_compra" value="0"></div><div class="col-md-2"><label class="form-label">Precio venta</label><input type="number" min="0" step="0.01" class="form-control" name="precio_venta" value="0"></div><div class="col-md-2"><label class="form-label">Ubicación</label><input class="form-control" name="ubicacion"></div><div class="col-md-2 d-flex align-items-end"><button class="btn btn-primary w-100">Guardar</button></div>
+</form></div></div><?php endif;?>
+<div class="card border-0 shadow-sm"><div class="card-header bg-white fw-bold">Productos registrados</div><div class="table-responsive"><table class="table table-hover align-middle mb-0"><thead class="table-dark"><tr><th>Código</th><th>Producto</th><th>Categoría</th><th>Proveedor</th><th>Precio venta</th><th>Stock</th><th>Estado</th></tr></thead><tbody><?php foreach($productos as $p):?><tr><td><code><?=e($p['Codigo'])?></code></td><td><strong><?=e($p['Nombre'])?></strong><div class="small text-secondary"><?=e($p['Descripcion'])?></div></td><td><?=e($p['Categoria'])?></td><td><?=e($p['Proveedor'] ?? '—')?></td><td>$<?=number_format((float)$p['PrecioVenta'],0,',','.')?></td><td><?=$p['StockActual']?></td><td><?php if($p['StockActual']==0):?><span class="badge bg-danger">Agotado</span><?php elseif($p['StockActual']<=$p['StockMinimo']):?><span class="badge bg-warning text-dark">Stock bajo</span><?php else:?><span class="badge bg-success">Normal</span><?php endif;?></td></tr><?php endforeach;?></tbody></table></div></div>
+</div></body></html>
